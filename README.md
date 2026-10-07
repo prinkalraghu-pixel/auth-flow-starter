@@ -27,7 +27,7 @@ Usernames must be 3–20 characters and use lowercase letters, numbers, `_` or `
 - Sign in on another local browser and see the same account's tasks.
 - Keep each account's tasks separate from other accounts.
 
-The timer and reminders run in the browser. Keep the FocusDesk tab open for them to fire. When a timer or reminder is due, FocusDesk plays a repeating in-app chime and shows a stop button; browser notifications are optional and depend on browser permission. Reminders are saved in that browser's local storage and are not synced to other devices.
+The timer and reminders run in the browser. Keep the FocusDesk tab open for them to fire. Choose from 10 built-in ring tones grouped as sad, happy, extra happy, normal, and calm, and preview the selected tone. When a timer or reminder is due, FocusDesk repeats the selected in-app chime and shows a stop button; browser notifications are optional and depend on browser permission. Reminders and the selected tone are saved in that browser's local storage and are not synced to other devices.
 
 ## Install on a phone
 
