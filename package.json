@@ -1,8 +1,8 @@
 {
-  "name": "auth-flow-starter",
+  "name": "focusdesk",
   "version": "1.0.0",
   "private": true,
-  "description": "A small, dependency-free authentication demo for learning request and token flows.",
+  "description": "A small local-first personal task manager with account sign-in and private task lists.",
   "type": "module",
   "scripts": {
     "start": "node --env-file=.env src/server.js"
