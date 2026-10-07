@@ -19,7 +19,8 @@ Usernames must be 3–20 characters and use lowercase letters, numbers, `_` or `
 
 - Create an account and sign in or out.
 - Add, edit, prioritize, complete, and delete tasks.
-- Set due dates and use Today, Upcoming, All tasks, and Completed views.
+- Set due dates and use Today, Upcoming, Calendar, All tasks, and Completed views.
+- Schedule tasks to repeat daily, on weekdays, or weekly; completing one creates its next occurrence.
 - See a daily progress ring and task counts.
 - Run a focus timer and schedule browser reminders.
 - Keep tasks saved between app restarts.
@@ -50,7 +51,7 @@ Browser <── Set-Cookie: HttpOnly + SameSite=Strict ──────┘
    ├─ GET /api/me ──> verify session and identify account
    ├─ GET /api/tasks ──> return only this account's tasks
    ├─ POST /api/tasks ──> save a task for this account
-   ├─ PATCH /api/tasks/:id ──> update title, priority, due date, or completed state
+   ├─ PATCH /api/tasks/:id ──> update title, priority, due date, repeat schedule, or completed state
    ├─ DELETE /api/tasks/:id ──> delete only this account's task
    └─ POST /api/logout ──> revoke session and clear cookie
 ```
