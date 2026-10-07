@@ -26,7 +26,7 @@ Usernames must be 3–20 characters and use lowercase letters, numbers, `_` or `
 - Sign in on another local browser and see the same account's tasks.
 - Keep each account's tasks separate from other accounts.
 
-The timer and reminders run in the browser. Keep the FocusDesk tab open for them to fire. Reminders are saved in that browser's local storage and are not synced to other devices; browser notifications are optional and depend on browser permission.
+The timer and reminders run in the browser. Keep the FocusDesk tab open for them to fire. When a timer or reminder is due, FocusDesk plays a repeating in-app chime and shows a stop button; browser notifications are optional and depend on browser permission. Reminders are saved in that browser's local storage and are not synced to other devices.
 
 ## Install on a phone
 
@@ -35,7 +35,7 @@ FocusDesk includes a web app manifest and a service worker, so it can be added t
 - **Android:** open the hosted FocusDesk URL in Chrome, then choose **Install app** or **Add to Home screen** in the browser menu.
 - **iPhone:** open the hosted URL in Safari, tap **Share**, then choose **Add to Home Screen**.
 
-The service worker caches the app shell for quicker opening. Login and task changes still need the server online. Timer and reminders are browser-based; they are not native background alarms and should not be relied on after closing the app.
+The service worker caches the app shell for quicker opening. Login and task changes still need the server online. Timer sounds and reminders are browser-based; they are not native background alarms and should not be relied on after closing the app.
 
 ## Request flow
 
