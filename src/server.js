@@ -19,6 +19,7 @@ const failedLogins = new Map();
 const maxLoginAttempts = 8;
 const loginWindowMs = 10 * 60 * 1000;
 const taskPriorities = new Set(['low', 'normal', 'high', 'urgent']);
+const taskRepeats = new Set(['none', 'daily', 'weekdays', 'weekly']);
 let store = { users: [], tasks: [] };
 let mutationQueue = Promise.resolve();
 
@@ -147,6 +148,19 @@ function isValidDueDate(value) {
   return !Number.isNaN(parsed.valueOf()) && parsed.toISOString().slice(0, 10) === value;
 }
 
+function nextOccurrenceDate(dueDate, repeat) {
+  if (!dueDate || repeat === 'none') return dueDate || null;
+  const date = new Date(`${dueDate}T12:00:00.000Z`);
+  for (let attempt = 0; attempt < 1000; attempt += 1) {
+    date.setUTCDate(date.getUTCDate() + (repeat === 'weekly' ? 7 : 1));
+    if (repeat === 'weekdays' && [0, 6].includes(date.getUTCDay())) continue;
+    if (date.toISOString().slice(0, 10) > new Date().toISOString().slice(0, 10)) {
+      return date.toISOString().slice(0, 10);
+    }
+  }
+  return date.toISOString().slice(0, 10);
+}
+
 function enforceSameOrigin(request) {
   const origin = request.headers.origin;
   if (!origin) return true;
@@ -239,11 +253,13 @@ async function handleApi(request, response, url) {
       if (!title || title.length > 140) return sendJson(response, 400, { error: 'Task title must be between 1 and 140 characters.' });
       const priority = body.priority || 'normal';
       const dueDate = body.dueDate || null;
+      const repeat = body.repeat || 'none';
       if (!taskPriorities.has(priority)) return sendJson(response, 400, { error: 'Choose a valid task priority.' });
+      if (!taskRepeats.has(repeat)) return sendJson(response, 400, { error: 'Choose a valid repeat schedule.' });
       if (dueDate !== null && !isValidDueDate(dueDate)) {
         return sendJson(response, 400, { error: 'Choose a valid due date.' });
       }
-      const task = { id: randomUUID(), userId: user.id, title, done: false, priority, dueDate, createdAt: new Date().toISOString() };
+      const task = { id: randomUUID(), userId: user.id, title, done: false, priority, dueDate, repeat, createdAt: new Date().toISOString() };
       await mutateStore(() => { store.tasks.push(task); return task; });
       return sendJson(response, 201, { task });
     }
@@ -273,6 +289,10 @@ async function handleApi(request, response, url) {
         if (!taskPriorities.has(body.priority)) return sendJson(response, 400, { error: 'Choose a valid task priority.' });
         changes.priority = body.priority;
       }
+      if ('repeat' in body) {
+        if (!taskRepeats.has(body.repeat)) return sendJson(response, 400, { error: 'Choose a valid repeat schedule.' });
+        changes.repeat = body.repeat;
+      }
       if ('dueDate' in body) {
         if (body.dueDate !== null && !isValidDueDate(body.dueDate)) {
           return sendJson(response, 400, { error: 'Choose a valid due date.' });
@@ -280,8 +300,23 @@ async function handleApi(request, response, url) {
         changes.dueDate = body.dueDate;
       }
       if (Object.keys(changes).length === 0) return sendJson(response, 400, { error: 'Choose a task detail to update.' });
-      await mutateStore(() => { Object.assign(task, changes); return task; });
-      return sendJson(response, 200, { task });
+      const result = await mutateStore(() => {
+        const wasDone = task.done;
+        Object.assign(task, changes);
+        let nextTask;
+        if (!wasDone && task.done && task.repeat && task.repeat !== 'none') {
+          nextTask = {
+            ...task,
+            id: randomUUID(),
+            done: false,
+            dueDate: nextOccurrenceDate(task.dueDate, task.repeat),
+            createdAt: new Date().toISOString(),
+          };
+          store.tasks.push(nextTask);
+        }
+        return { task, nextTask };
+      });
+      return sendJson(response, 200, result);
     }
     await mutateStore(() => { store.tasks = store.tasks.filter((item) => item.id !== task.id); return true; });
     return sendJson(response, 200, { ok: true });
