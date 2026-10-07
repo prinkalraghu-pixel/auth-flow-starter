@@ -4,6 +4,11 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f8f8f5">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="FocusDesk">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <title>FocusDesk — Make room for focus</title>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap');
@@ -21,6 +26,7 @@
 </head>
 <body><div id="app"><div class="loading">Opening FocusDesk…</div></div>
 <script>
+if ('serviceWorker' in navigator) addEventListener('load',()=>navigator.serviceWorker.register('/sw.js').catch(()=>{}));
 const app=document.querySelector('#app');
 const state={user:null,tasks:[],view:'overview',authMode:'register',editing:null,busy:false,dialog:null,timerEnd:0,timerInterval:null};
 const today=new Date();today.setHours(0,0,0,0);
