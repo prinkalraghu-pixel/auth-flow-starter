@@ -27,7 +27,7 @@ Usernames must be 3–20 characters and use lowercase letters, numbers, `_` or `
 - Sign in on another local browser and see the same account's tasks.
 - Keep each account's tasks separate from other accounts.
 
-The timer and reminders run in the browser. Keep the FocusDesk tab open for them to fire. Choose from 10 synthesized melodies based on familiar public-domain compositions, labeled Ring 1 through Ring 10, and preview the selected theme. Each melody combines piano-like and violin-like synthesized sounds and plays for at least 15 seconds. FocusDesk creates the tones itself and does not include song recordings. When a timer or reminder is due, FocusDesk repeats the selected in-app music and shows a stop button; browser notifications are optional and depend on browser permission. Reminders and the selected tone are saved in that browser's local storage and are not synced to other devices.
+The timer and reminders run in the browser. Keep the FocusDesk tab open for them to fire. Choose from 10 synthesized melodies based on familiar public-domain compositions, labeled Ring 1 through Ring 10, and preview the selected theme. Each melody uses piano-like synthesized notes and plays for at least 15 seconds. FocusDesk creates the tones itself and does not include song recordings. When a timer or reminder is due, FocusDesk repeats the selected in-app music and shows a stop button; browser notifications are optional and depend on browser permission. Reminders and the selected tone are saved in that browser's local storage and are not synced to other devices.
 
 ## Install on a phone
 
