@@ -18,6 +18,7 @@ const sessions = new Map();
 const failedLogins = new Map();
 const maxLoginAttempts = 8;
 const loginWindowMs = 10 * 60 * 1000;
+const taskPriorities = new Set(['low', 'normal', 'high', 'urgent']);
 let store = { users: [], tasks: [] };
 let mutationQueue = Promise.resolve();
 
@@ -140,6 +141,12 @@ function isValidUsername(username) {
   return typeof username === 'string' && /^[a-z0-9][a-z0-9_-]{2,19}$/.test(username);
 }
 
+function isValidDueDate(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(parsed.valueOf()) && parsed.toISOString().slice(0, 10) === value;
+}
+
 function enforceSameOrigin(request) {
   const origin = request.headers.origin;
   if (!origin) return true;
@@ -230,7 +237,13 @@ async function handleApi(request, response, url) {
       const body = await readJson(request);
       const title = typeof body.title === 'string' ? body.title.trim() : '';
       if (!title || title.length > 140) return sendJson(response, 400, { error: 'Task title must be between 1 and 140 characters.' });
-      const task = { id: randomUUID(), userId: user.id, title, done: false, createdAt: new Date().toISOString() };
+      const priority = body.priority || 'normal';
+      const dueDate = body.dueDate || null;
+      if (!taskPriorities.has(priority)) return sendJson(response, 400, { error: 'Choose a valid task priority.' });
+      if (dueDate !== null && !isValidDueDate(dueDate)) {
+        return sendJson(response, 400, { error: 'Choose a valid due date.' });
+      }
+      const task = { id: randomUUID(), userId: user.id, title, done: false, priority, dueDate, createdAt: new Date().toISOString() };
       await mutateStore(() => { store.tasks.push(task); return task; });
       return sendJson(response, 201, { task });
     }
@@ -245,8 +258,29 @@ async function handleApi(request, response, url) {
     if (!task) return sendJson(response, 404, { error: 'Task not found.' });
     if (request.method === 'PATCH') {
       const body = await readJson(request);
-      if (typeof body.done !== 'boolean') return sendJson(response, 400, { error: 'A completed status is required.' });
-      await mutateStore(() => { task.done = body.done; return task; });
+      const changes = {};
+      if ('title' in body) {
+        if (typeof body.title !== 'string' || !body.title.trim() || body.title.trim().length > 140) {
+          return sendJson(response, 400, { error: 'Task title must be between 1 and 140 characters.' });
+        }
+        changes.title = body.title.trim();
+      }
+      if ('done' in body) {
+        if (typeof body.done !== 'boolean') return sendJson(response, 400, { error: 'Choose a valid completed status.' });
+        changes.done = body.done;
+      }
+      if ('priority' in body) {
+        if (!taskPriorities.has(body.priority)) return sendJson(response, 400, { error: 'Choose a valid task priority.' });
+        changes.priority = body.priority;
+      }
+      if ('dueDate' in body) {
+        if (body.dueDate !== null && !isValidDueDate(body.dueDate)) {
+          return sendJson(response, 400, { error: 'Choose a valid due date.' });
+        }
+        changes.dueDate = body.dueDate;
+      }
+      if (Object.keys(changes).length === 0) return sendJson(response, 400, { error: 'Choose a task detail to update.' });
+      await mutateStore(() => { Object.assign(task, changes); return task; });
       return sendJson(response, 200, { task });
     }
     await mutateStore(() => { store.tasks = store.tasks.filter((item) => item.id !== task.id); return true; });
