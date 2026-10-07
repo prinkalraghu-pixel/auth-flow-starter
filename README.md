@@ -28,6 +28,15 @@ Usernames must be 3–20 characters and use lowercase letters, numbers, `_` or `
 
 The timer and reminders run in the browser. Keep the FocusDesk tab open for them to fire. Reminders are saved in that browser's local storage and are not synced to other devices; browser notifications are optional and depend on browser permission.
 
+## Install on a phone
+
+FocusDesk includes a web app manifest and a service worker, so it can be added to an Android or iPhone home screen and open in a standalone app window. It must be served from an HTTPS website for phone installation. `localhost` works for development on the computer itself, but it is not a public address your phone can open. This project still needs a Node.js host and HTTPS domain before it can be installed from a phone; GitHub Pages alone cannot run its account and task API.
+
+- **Android:** open the hosted FocusDesk URL in Chrome, then choose **Install app** or **Add to Home screen** in the browser menu.
+- **iPhone:** open the hosted URL in Safari, tap **Share**, then choose **Add to Home Screen**.
+
+The service worker caches the app shell for quicker opening. Login and task changes still need the server online. Timer and reminders are browser-based; they are not native background alarms and should not be relied on after closing the app.
+
 ## Request flow
 
 ```text
@@ -52,7 +61,10 @@ The browser never receives the password hash or session ID through page JavaScri
 
 ```text
 public/index.html    FocusDesk interface, focus timer, browser reminders, and requests
-src/server.js        Registration, login, sessions, task API, persistence
+public/manifest.webmanifest  Installable app name, colors, and icon
+public/sw.js         Small offline cache for the app shell (never caches API data)
+public/icon.svg      Home-screen and browser icon
+src/server.js        Registration, login, sessions, task API, persistence, and static assets
 data/store.json      Created on first account; local user and task records
 .env.example         Safe local configuration example
 .gitignore           Excludes environment files and personal data
