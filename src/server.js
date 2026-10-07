@@ -290,7 +290,19 @@ async function handleApi(request, response, url) {
   return sendJson(response, 404, { error: 'API route not found.' });
 }
 
-const contentTypes = { '.html': 'text/html; charset=utf-8' };
+const publicAssets = new Map([
+  ['/', 'index.html'],
+  ['/index.html', 'index.html'],
+  ['/manifest.webmanifest', 'manifest.webmanifest'],
+  ['/icon.svg', 'icon.svg'],
+  ['/sw.js', 'sw.js'],
+]);
+const contentTypes = {
+  '.html': 'text/html; charset=utf-8',
+  '.webmanifest': 'application/manifest+json; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.js': 'text/javascript; charset=utf-8',
+};
 const server = createServer(async (request, response) => {
   try {
     const url = new URL(request.url, `http://${request.headers.host || 'localhost'}`);
@@ -298,10 +310,11 @@ const server = createServer(async (request, response) => {
     if (request.method !== 'GET' && request.method !== 'HEAD') {
       return sendJson(response, 405, { error: 'Method not allowed.' }, { Allow: 'GET, HEAD' });
     }
-    if (url.pathname !== '/' && url.pathname !== '/index.html') return sendJson(response, 404, { error: 'Not found.' });
-    const page = await readFile(join(publicDir, 'index.html'));
+    const assetName = publicAssets.get(url.pathname);
+    if (!assetName) return sendJson(response, 404, { error: 'Not found.' });
+    const page = await readFile(join(publicDir, assetName));
     response.writeHead(200, {
-      'Content-Type': contentTypes[extname('index.html')],
+      'Content-Type': contentTypes[extname(assetName)],
       'X-Content-Type-Options': 'nosniff',
       'Referrer-Policy': 'no-referrer',
       'Cache-Control': 'no-store',
