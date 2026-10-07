@@ -18,10 +18,15 @@ Usernames must be 3–20 characters and use lowercase letters, numbers, `_` or `
 ## What you can do
 
 - Create an account and sign in or out.
-- Add tasks, mark them complete, filter the list, and delete tasks.
+- Add, edit, prioritize, complete, and delete tasks.
+- Set due dates and use Today, Upcoming, All tasks, and Completed views.
+- See a daily progress ring and task counts.
+- Run a focus timer and schedule browser reminders.
 - Keep tasks saved between app restarts.
 - Sign in on another local browser and see the same account's tasks.
 - Keep each account's tasks separate from other accounts.
+
+The timer and reminders run in the browser. Keep the FocusDesk tab open for them to fire. Reminders are saved in that browser's local storage and are not synced to other devices; browser notifications are optional and depend on browser permission.
 
 ## Request flow
 
@@ -36,7 +41,7 @@ Browser <── Set-Cookie: HttpOnly + SameSite=Strict ──────┘
    ├─ GET /api/me ──> verify session and identify account
    ├─ GET /api/tasks ──> return only this account's tasks
    ├─ POST /api/tasks ──> save a task for this account
-   ├─ PATCH /api/tasks/:id ──> update its completed state
+   ├─ PATCH /api/tasks/:id ──> update title, priority, due date, or completed state
    ├─ DELETE /api/tasks/:id ──> delete only this account's task
    └─ POST /api/logout ──> revoke session and clear cookie
 ```
@@ -46,7 +51,7 @@ The browser never receives the password hash or session ID through page JavaScri
 ## Project structure
 
 ```text
-public/index.html    FocusDesk interface and browser-side requests
+public/index.html    FocusDesk interface, focus timer, browser reminders, and requests
 src/server.js        Registration, login, sessions, task API, persistence
 data/store.json      Created on first account; local user and task records
 .env.example         Safe local configuration example
