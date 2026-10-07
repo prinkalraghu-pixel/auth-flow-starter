@@ -30,7 +30,7 @@
 <script>
 if ('serviceWorker' in navigator) addEventListener('load',()=>navigator.serviceWorker.register('/sw.js').catch(()=>{}));
 const app=document.querySelector('#app');
-const state={user:null,tasks:[],view:'overview',authMode:'register',editing:null,busy:false,dialog:null,alarmMessage:null,alarmInterval:null,audioContext:null,alarmTone:localStorage.getItem('focusdesk-alarm-tone')||'normal-classic',selectedDate:null,calendarMonth:new Date(new Date().getFullYear(),new Date().getMonth(),1),timerEnd:Number(localStorage.getItem('focusdesk-timer-end'))||0,timerMinutes:Number(localStorage.getItem('focusdesk-timer-minutes'))||25,timerDuration:Number(localStorage.getItem('focusdesk-timer-duration'))||25*60000,timerInterval:null};
+const state={user:null,tasks:[],view:'overview',authMode:'register',editing:null,busy:false,dialog:null,alarmMessage:null,alarmInterval:null,audioContext:null,alarmTone:localStorage.getItem('focusdesk-alarm-tone')||'ring-1',selectedDate:null,calendarMonth:new Date(new Date().getFullYear(),new Date().getMonth(),1),timerEnd:Number(localStorage.getItem('focusdesk-timer-end'))||0,timerMinutes:Number(localStorage.getItem('focusdesk-timer-minutes'))||25,timerDuration:Number(localStorage.getItem('focusdesk-timer-duration'))||25*60000,timerInterval:null};
 const today=new Date();today.setHours(0,0,0,0);
 const dayKey=(date)=>{const d=new Date(date);return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`};
 state.selectedDate=dayKey(new Date());
@@ -43,7 +43,18 @@ function saveReminders(items){localStorage.setItem('focusdesk-reminders',JSON.st
 function timerText(){if(!state.timerEnd)return 'A little focused time goes a long way.';const seconds=Math.max(0,Math.ceil((state.timerEnd-Date.now())/1000));return `Running · ${String(Math.floor(seconds/60)).padStart(2,'0')}:${String(seconds%60).padStart(2,'0')} left`}
 function updateTimerRing(){const ring=document.querySelector('#timer-ring');if(!ring)return;const remaining=state.timerEnd?Math.max(0,state.timerEnd-Date.now()):state.timerDuration;const elapsed=1-Math.min(1,remaining/Math.max(1,state.timerDuration));ring.style.strokeDashoffset=String(440*elapsed)}
 function prepareAudio(){try{const AudioContextClass=window.AudioContext||window.webkitAudioContext;if(!AudioContextClass)return;state.audioContext??=new AudioContextClass();if(state.audioContext.state==='suspended')state.audioContext.resume()}catch{}}
-const alarmTones=[['sad-rain','','Ring 1',[392,349,330,262],260],['sad-echo','','Ring 2',[440,392,330],330],['happy-sunrise','','Ring 3',[523,659,784,659],180],['happy-bells','','Ring 4',[659,784,880,784],160],['extra-celebrate','','Ring 5',[523,659,784,1047,784,1047],125],['extra-sparkle','','Ring 6',[784,988,1175,1568,1175],120],['normal-classic','','Ring 7',[660,880],320],['normal-double','','Ring 8',[740,587,740],240],['calm-soft','','Ring 9',[440,523,587],300],['calm-evening','','Ring 10',[392,440,523],360]];
+const alarmTones=[
+  ['ring-1','','Ring 1',[523,523,784,784,880,880,784,698,698,659,659,587,587,523],300],
+  ['ring-2','','Ring 2',[659,587,523,587,659,659,659,587,587,587,659,784,784],260],
+  ['ring-3','','Ring 3',[659,659,698,784,784,698,659,587,523,523,587,659,659,587,587],250],
+  ['ring-4','','Ring 4',[523,587,659,523,523,587,659,523,659,698,784,659,698,784],260],
+  ['ring-5','','Ring 5',[784,880,784,698,659,698,784,587,659,698,784],260],
+  ['ring-6','','Ring 6',[523,523,523,587,659,659,587,659,698,784],250],
+  ['ring-7','','Ring 7',[659,659,659,659,659,659,659,784,523,587,659],220],
+  ['ring-8','','Ring 8',[659,622,659,622,659,494,587,523,440],240],
+  ['ring-9','','Ring 9',[587,587,587,523,587,659,698,698,659,587,659,698,784],280],
+  ['ring-10','','Ring 10',[440,523,587,659,698,659,587,494,392,440,523,587,659],280]
+];
 function playBellTone(frequency){if(!state.audioContext||state.audioContext.state!=='running')return;const now=state.audioContext.currentTime,oscillator=state.audioContext.createOscillator(),gain=state.audioContext.createGain();oscillator.type='sine';oscillator.frequency.value=frequency;gain.gain.setValueAtTime(.001,now);gain.gain.exponentialRampToValueAtTime(.16,now+.025);gain.gain.setValueAtTime(.16,now+.22);gain.gain.exponentialRampToValueAtTime(.001,now+.48);oscillator.connect(gain);gain.connect(state.audioContext.destination);oscillator.start(now);oscillator.stop(now+.5)}
 function ringBell(){const tone=alarmTones.find(item=>item[0]===state.alarmTone)||alarmTones[6];tone[3].forEach((frequency,index)=>setTimeout(()=>playBellTone(frequency),index*tone[4]))}
 function soundPickerMarkup(){return `<div class="sound-picker"><label for="alarm-sound">Ring tone</label><select id="alarm-sound">${alarmTones.map(tone=>`<option value="${tone[0]}">${tone[2]}</option>`).join('')}</select><button class="roundbtn" id="alarm-test" type="button">▶ Preview</button></div>`}
