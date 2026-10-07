@@ -1,23 +1,33 @@
-import { createHmac, createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
+import { randomBytes, randomUUID, scrypt, timingSafeEqual } from 'node:crypto';
+import { promisify } from 'node:util';
 import { createServer } from 'node:http';
-import { readFile } from 'node:fs/promises';
-import { extname, join, normalize } from 'node:path';
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+const scryptAsync = promisify(scrypt);
 const root = fileURLToPath(new URL('..', import.meta.url));
 const publicDir = join(root, 'public');
+const dataDir = resolve(root, process.env.DATA_DIR || 'data');
+const storePath = join(dataDir, 'store.json');
 const port = Number(process.env.PORT || 3000);
-const expectedUsername = process.env.DEMO_USERNAME || 'learner';
-const demoPassword = process.env.DEMO_PASSWORD || 'change-this-demo-password';
-const sessionSecret = process.env.SESSION_SECRET || 'local-only-change-me';
-const sessionTtlSeconds = 60 * 60;
-const salt = randomBytes(16);
-const expectedPasswordHash = scryptSync(demoPassword, salt, 64);
+const sessionTtlMs = 12 * 60 * 60 * 1000;
+const sessionCookie = 'focusdesk_session';
+const dummySalt = randomBytes(16);
+const sessions = new Map();
+const failedLogins = new Map();
+const maxLoginAttempts = 8;
+const loginWindowMs = 10 * 60 * 1000;
+let store = { users: [], tasks: [] };
+let mutationQueue = Promise.resolve();
 
-const mimeTypes = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8' };
-
-function sendJson(response, statusCode, body, headers = {}) {
-  response.writeHead(statusCode, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...headers });
+function sendJson(response, statusCode, body, extraHeaders = {}) {
+  response.writeHead(statusCode, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff',
+    ...extraHeaders,
+  });
   response.end(JSON.stringify(body));
 }
 
@@ -25,76 +35,253 @@ async function readJson(request) {
   let raw = '';
   for await (const chunk of request) {
     raw += chunk;
-    if (raw.length > 10_000) throw new Error('Request body too large');
+    if (Buffer.byteLength(raw) > 12_000) throw new Error('Request body too large');
   }
-  return JSON.parse(raw || '{}');
+  try { return JSON.parse(raw || '{}'); }
+  catch { throw new Error('Invalid JSON'); }
 }
 
-function sign(value) {
-  return createHmac('sha256', sessionSecret).update(value).digest('base64url');
+function cookieFlags(maxAge) {
+  return `Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`;
 }
 
-function createSession(username) {
-  const payload = Buffer.from(JSON.stringify({ sub: username, exp: Math.floor(Date.now() / 1000) + sessionTtlSeconds })).toString('base64url');
-  return `${payload}.${sign(payload)}`;
+function setSessionCookie(response, value, maxAge) {
+  response.setHeader('Set-Cookie', `${sessionCookie}=${value}; ${cookieFlags(maxAge)}`);
 }
 
-function getSession(request) {
+function getRequestSession(request) {
   const cookieHeader = request.headers.cookie || '';
-  const token = cookieHeader.split(';').map(part => part.trim()).find(part => part.startsWith('demo_session='))?.slice('demo_session='.length);
+  const token = cookieHeader.split(';').map((part) => part.trim())
+    .find((part) => part.startsWith(`${sessionCookie}=`))?.slice(sessionCookie.length + 1);
   if (!token) return null;
-  const [payload, signature, extra] = token.split('.');
-  if (!payload || !signature || extra) return null;
-  const expected = Buffer.from(sign(payload));
-  const received = Buffer.from(signature);
-  if (expected.length !== received.length || !timingSafeEqual(expected, received)) return null;
-  try {
-    const session = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
-    if (typeof session.sub !== 'string' || typeof session.exp !== 'number' || session.exp <= Date.now() / 1000) return null;
-    return session;
-  } catch { return null; }
+  const session = sessions.get(token);
+  if (!session || session.expiresAt <= Date.now()) {
+    sessions.delete(token);
+    return null;
+  }
+  return { token, ...session };
 }
 
-const cookieOptions = `Path=/; HttpOnly; SameSite=Strict; Max-Age=${sessionTtlSeconds}${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`;
-const expiredCookie = `Path=/; HttpOnly; SameSite=Strict; Max-Age=0${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`;
+function pruneExpiredSessions() {
+  const now = Date.now();
+  for (const [token, session] of sessions) if (session.expiresAt <= now) sessions.delete(token);
+  for (const [ip, item] of failedLogins) if (item.resetAt <= now) failedLogins.delete(ip);
+}
 
+function requestIp(request) {
+  return request.socket.remoteAddress || 'unknown';
+}
+
+function checkLoginRateLimit(request) {
+  pruneExpiredSessions();
+  const record = failedLogins.get(requestIp(request));
+  return record && record.count >= maxLoginAttempts
+    ? Math.max(1, Math.ceil((record.resetAt - Date.now()) / 1000))
+    : 0;
+}
+
+function recordFailedLogin(request) {
+  const key = requestIp(request);
+  const current = failedLogins.get(key);
+  if (!current || current.resetAt <= Date.now()) {
+    failedLogins.set(key, { count: 1, resetAt: Date.now() + loginWindowMs });
+  } else {
+    current.count += 1;
+  }
+}
+
+function clearFailedLogins(request) {
+  failedLogins.delete(requestIp(request));
+}
+
+async function passwordHash(password, salt) {
+  return scryptAsync(password, salt, 64, { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 });
+}
+
+function timingSafeTextMatch(left, right) {
+  const a = Buffer.from(left);
+  const b = Buffer.from(right);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+async function readStore() {
+  try {
+    const parsed = JSON.parse(await readFile(storePath, 'utf8'));
+    if (!Array.isArray(parsed.users) || !Array.isArray(parsed.tasks)) throw new Error('Invalid data store format');
+    return parsed;
+  } catch (error) {
+    if (error.code === 'ENOENT') return { users: [], tasks: [] };
+    throw error;
+  }
+}
+
+async function persistStore() {
+  await mkdir(dataDir, { recursive: true });
+  const temporaryPath = `${storePath}.${randomUUID()}.tmp`;
+  await writeFile(temporaryPath, `${JSON.stringify(store, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+  await rename(temporaryPath, storePath);
+}
+
+function mutateStore(operation) {
+  const result = mutationQueue.then(async () => {
+    const value = await operation();
+    await persistStore();
+    return value;
+  });
+  mutationQueue = result.catch(() => {});
+  return result;
+}
+
+function publicUser(user) {
+  return { id: user.id, username: user.username };
+}
+
+function isValidUsername(username) {
+  return typeof username === 'string' && /^[a-z0-9][a-z0-9_-]{2,19}$/.test(username);
+}
+
+function enforceSameOrigin(request) {
+  const origin = request.headers.origin;
+  if (!origin) return true;
+  try {
+    return new URL(origin).host === request.headers.host;
+  } catch {
+    return false;
+  }
+}
+
+async function handleApi(request, response, url) {
+  if (!enforceSameOrigin(request)) return sendJson(response, 403, { error: 'Request origin not allowed.' });
+
+  if (request.method === 'POST' && url.pathname === '/api/register') {
+    const body = await readJson(request);
+    const username = typeof body.username === 'string' ? body.username.trim().toLowerCase() : '';
+    const password = typeof body.password === 'string' ? body.password : '';
+    if (!isValidUsername(username)) {
+      return sendJson(response, 400, { error: 'Username must be 3–20 characters: lowercase letters, numbers, _ or -.' });
+    }
+    if (password.length < 12 || Buffer.byteLength(password) > 1024) {
+      return sendJson(response, 400, { error: 'Choose a password with at least 12 characters.' });
+    }
+    const user = await mutateStore(async () => {
+      if (store.users.some((item) => item.username === username)) return null;
+      const salt = randomBytes(16);
+      const hash = await passwordHash(password, salt);
+      const created = { id: randomUUID(), username, salt: salt.toString('base64url'), passwordHash: hash.toString('base64url'), createdAt: new Date().toISOString() };
+      store.users.push(created);
+      return created;
+    });
+    if (!user) return sendJson(response, 409, { error: 'That username is already taken.' });
+    const token = randomBytes(32).toString('base64url');
+    sessions.set(token, { userId: user.id, expiresAt: Date.now() + sessionTtlMs });
+    setSessionCookie(response, token, Math.floor(sessionTtlMs / 1000));
+    return sendJson(response, 201, { user: publicUser(user) });
+  }
+
+  if (request.method === 'POST' && url.pathname === '/api/login') {
+    const retryAfter = checkLoginRateLimit(request);
+    if (retryAfter) return sendJson(response, 429, { error: 'Too many sign-in attempts. Try again later.' }, { 'Retry-After': String(retryAfter) });
+    const body = await readJson(request);
+    const username = typeof body.username === 'string' ? body.username.trim().toLowerCase() : '';
+    const password = typeof body.password === 'string' && Buffer.byteLength(body.password) <= 1024 ? body.password : '';
+    const user = store.users.find((item) => item.username === username);
+    const salt = user ? Buffer.from(user.salt, 'base64url') : dummySalt;
+    const actualHash = await passwordHash(password, salt);
+    const passwordMatches = user
+      ? timingSafeTextMatch(actualHash.toString('base64url'), user.passwordHash)
+      : false;
+    if (!user || !passwordMatches) {
+      recordFailedLogin(request);
+      return sendJson(response, 401, { error: 'Username or password is incorrect.' });
+    }
+    clearFailedLogins(request);
+    const token = randomBytes(32).toString('base64url');
+    sessions.set(token, { userId: user.id, expiresAt: Date.now() + sessionTtlMs });
+    setSessionCookie(response, token, Math.floor(sessionTtlMs / 1000));
+    return sendJson(response, 200, { user: publicUser(user) });
+  }
+
+  if (request.method === 'POST' && url.pathname === '/api/logout') {
+    const session = getRequestSession(request);
+    if (session) sessions.delete(session.token);
+    setSessionCookie(response, '', 0);
+    return sendJson(response, 200, { ok: true });
+  }
+
+  if (request.method === 'GET' && url.pathname === '/api/me') {
+    const session = getRequestSession(request);
+    const user = session && store.users.find((item) => item.id === session.userId);
+    if (!user) return sendJson(response, 401, { error: 'Please sign in to continue.' });
+    return sendJson(response, 200, { user: publicUser(user) });
+  }
+
+  if (url.pathname === '/api/tasks') {
+    const session = getRequestSession(request);
+    const user = session && store.users.find((item) => item.id === session.userId);
+    if (!user) return sendJson(response, 401, { error: 'Please sign in to continue.' });
+
+    if (request.method === 'GET') {
+      const tasks = store.tasks.filter((task) => task.userId === user.id)
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+      return sendJson(response, 200, { tasks });
+    }
+
+    if (request.method === 'POST') {
+      const body = await readJson(request);
+      const title = typeof body.title === 'string' ? body.title.trim() : '';
+      if (!title || title.length > 140) return sendJson(response, 400, { error: 'Task title must be between 1 and 140 characters.' });
+      const task = { id: randomUUID(), userId: user.id, title, done: false, createdAt: new Date().toISOString() };
+      await mutateStore(() => { store.tasks.push(task); return task; });
+      return sendJson(response, 201, { task });
+    }
+  }
+
+  const taskMatch = url.pathname.match(/^\/api\/tasks\/([0-9a-f-]{36})$/i);
+  if (taskMatch && ['PATCH', 'DELETE'].includes(request.method)) {
+    const session = getRequestSession(request);
+    const user = session && store.users.find((item) => item.id === session.userId);
+    if (!user) return sendJson(response, 401, { error: 'Please sign in to continue.' });
+    const task = store.tasks.find((item) => item.id === taskMatch[1] && item.userId === user.id);
+    if (!task) return sendJson(response, 404, { error: 'Task not found.' });
+    if (request.method === 'PATCH') {
+      const body = await readJson(request);
+      if (typeof body.done !== 'boolean') return sendJson(response, 400, { error: 'A completed status is required.' });
+      await mutateStore(() => { task.done = body.done; return task; });
+      return sendJson(response, 200, { task });
+    }
+    await mutateStore(() => { store.tasks = store.tasks.filter((item) => item.id !== task.id); return true; });
+    return sendJson(response, 200, { ok: true });
+  }
+
+  return sendJson(response, 404, { error: 'API route not found.' });
+}
+
+const contentTypes = { '.html': 'text/html; charset=utf-8' };
 const server = createServer(async (request, response) => {
   try {
     const url = new URL(request.url, `http://${request.headers.host || 'localhost'}`);
-    if (request.method === 'POST' && url.pathname === '/api/login') {
-      const body = await readJson(request);
-      const submittedPassword = typeof body.password === 'string' ? body.password : '';
-      const submittedHash = scryptSync(submittedPassword, salt, 64);
-      const usernameMatches = typeof body.username === 'string' && body.username === expectedUsername;
-      const passwordMatches = timingSafeEqual(expectedPasswordHash, submittedHash);
-      if (!usernameMatches || !passwordMatches) return sendJson(response, 401, { error: 'Username or password is incorrect.' });
-      return sendJson(response, 200, { user: { username: expectedUsername } }, { 'Set-Cookie': `demo_session=${createSession(expectedUsername)}; ${cookieOptions}` });
+    if (url.pathname.startsWith('/api/')) return await handleApi(request, response, url);
+    if (request.method !== 'GET' && request.method !== 'HEAD') {
+      return sendJson(response, 405, { error: 'Method not allowed.' }, { Allow: 'GET, HEAD' });
     }
-    if (request.method === 'GET' && url.pathname === '/api/me') {
-      const session = getSession(request);
-      if (!session) return sendJson(response, 401, { error: 'No valid session. Please sign in.' });
-      return sendJson(response, 200, { user: { username: session.sub } });
-    }
-    if (request.method === 'POST' && url.pathname === '/api/logout') {
-      return sendJson(response, 200, { ok: true }, { 'Set-Cookie': `demo_session=; ${expiredCookie}` });
-    }
-    if (request.method === 'GET' && url.pathname.startsWith('/api/')) return sendJson(response, 404, { error: 'Route not found.' });
-    if (request.method !== 'GET' && request.method !== 'HEAD') return sendJson(response, 405, { error: 'Method not allowed.' }, { Allow: 'GET, HEAD' });
-
-    const pathname = url.pathname === '/' ? '/index.html' : decodeURIComponent(url.pathname);
-    const relative = normalize(pathname).replace(/^([/\\]|\.\.(?:[/\\]|$))+/, '');
-    const filePath = join(publicDir, relative);
-    if (!filePath.startsWith(publicDir)) return sendJson(response, 403, { error: 'Forbidden.' });
-    const content = await readFile(filePath);
-    response.writeHead(200, { 'Content-Type': mimeTypes[extname(filePath)] || 'application/octet-stream', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' });
-    response.end(request.method === 'HEAD' ? undefined : content);
+    if (url.pathname !== '/' && url.pathname !== '/index.html') return sendJson(response, 404, { error: 'Not found.' });
+    const page = await readFile(join(publicDir, 'index.html'));
+    response.writeHead(200, {
+      'Content-Type': contentTypes[extname('index.html')],
+      'X-Content-Type-Options': 'nosniff',
+      'Referrer-Policy': 'no-referrer',
+      'Cache-Control': 'no-store',
+    });
+    return response.end(request.method === 'HEAD' ? undefined : page);
   } catch (error) {
-    if (error instanceof SyntaxError || error.message === 'Request body too large') return sendJson(response, 400, { error: 'Invalid request body.' });
-    if (error.code === 'ENOENT') return sendJson(response, 404, { error: 'Not found.' });
+    if (error.message === 'Invalid JSON' || error.message === 'Request body too large') {
+      return sendJson(response, 400, { error: error.message === 'Invalid JSON' ? 'Please send valid JSON.' : 'Request body too large.' });
+    }
     console.error('Request failed:', error.message);
-    return sendJson(response, 500, { error: 'Server error.' });
+    return sendJson(response, 500, { error: 'A server error occurred.' });
   }
 });
 
-server.listen(port, () => console.log(`Auth Flow Starter is running at http://localhost:${port}`));
+store = await readStore();
+server.listen(port, () => console.log(`FocusDesk is running at http://localhost:${port}`));
 
